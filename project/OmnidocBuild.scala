@@ -12,7 +12,7 @@ object OmnidocBuild extends Build {
 
   val snapshotVersionLabel = "2.4.x"
 
-  val playVersion       = sys.props.getOrElse("play.version",       "2.4.0")
+  val playVersion       = sys.props.getOrElse("play.version",       "2.4.1-SNAPSHOT")
   val anormVersion      = sys.props.getOrElse("anorm.version",      "2.4.0")
   val playEbeanVersion  = sys.props.getOrElse("play-ebean.version", "1.0.0")
   val playSlickVersion  = sys.props.getOrElse("play-slick.version", "1.0.0")
@@ -51,11 +51,17 @@ object OmnidocBuild extends Build {
 
   val PlaydocClassifier = "playdoc"
 
-  val extractedSources = TaskKey[Seq[Extracted]]("extractedSources")
-  val sourceUrls       = TaskKey[Map[String, String]]("sourceUrls")
-  val javadoc          = TaskKey[File]("javadoc")
-  val scaladoc         = TaskKey[File]("scaladoc")
-  val playdoc          = TaskKey[File]("playdoc")
+  val extractedSources = taskKey[Seq[Extracted]]("extractedSources")
+  val sourceUrls       = taskKey[Map[String, String]]("sourceUrls")
+  val javadoc          = taskKey[File]("javadoc")
+  val scaladoc         = taskKey[File]("scaladoc")
+  val playdoc          = taskKey[File]("playdoc")
+  val rpdoc            = taskKey[File]("rpdoc")
+  val rpVersion        = settingKey[Option[String]]("Reactive platform version")
+  val akkaVersion      = taskKey[String]("Akka version")
+  val akkaDocsUrl      = taskKey[String]("Akka docs URL")
+  val akkaScalaDocsUrl = taskKey[String]("Akka scaladocs URL")
+  val akkaJavaDocsUrl  = taskKey[String]("Akka javadocs URL")
 
   lazy val omnidoc = project
     .in(file("."))
@@ -71,13 +77,20 @@ object OmnidocBuild extends Build {
       extractSettings ++
       scaladocSettings ++
       javadocSettings ++
-      packageSettings
+      packageSettings ++
+      rpdocSettings
     }
 
   def projectSettings: Seq[Setting[_]] = Seq(
                                name := "play-omnidoc",
                             version := playVersion,
-     playBuildRepoName in ThisBuild := "omnidoc"
+     playBuildRepoName in ThisBuild := "omnidoc",
+     rpVersion                      := Some("15v01p05"),
+     // todo - calculate this from dependencies
+     akkaVersion                    := "2.3.11",
+     akkaDocsUrl                    := rpVersion.value.fold(s"http://doc.akka.io/docs/${akkaVersion.value}")(rpv => rpDocsBase(rpv) + "/akka"),
+     akkaScalaDocsUrl               := rpVersion.value.fold(s"http://doc.akka.io/api/${akkaVersion.value}")(rpv => rpDocsBase(rpv) + "/akka/api"),
+     akkaJavaDocsUrl                := rpVersion.value.fold(s"http://doc.akka.io/japi/${akkaVersion.value}")(rpv => rpDocsBase(rpv) + "/akka/japi")
   )
 
   def dependencySettings: Seq[Setting[_]] = Seq(
@@ -142,6 +155,21 @@ object OmnidocBuild extends Build {
     }
   )
 
+  def rpdocSettings: Seq[Setting[_]] = Defaults.packageTaskSettings(rpdoc, mappings in rpdoc) ++ Seq(
+    artifactClassifier in rpdoc := Some("rpdoc"),
+    mappings in rpdoc := ReactivePlatformDocs.generateRpDocs(playdoc.value, (target in rpdoc).value, scaladoc.value,
+      javadoc.value,
+      Map(
+        "akka" -> akkaDocsUrl.value,
+        "akkasapi" -> akkaScalaDocsUrl.value,
+        "akkajapi" -> akkaJavaDocsUrl.value
+      )
+    ),
+    target in rpdoc := target.value / "rpdoc"
+  )
+
+  def rpDocsBase(rpv: String) = s"/docs/en/rp/$rpv"
+
   /**
    * Custom update classifiers task that only resolves classifiers for Play modules.
    * Also redirects warnings to debug for any artifacts that can't be found.
@@ -199,9 +227,16 @@ object OmnidocBuild extends Build {
   def scaladocOptions = Def.task {
     val sourcepath   = (target in sources).value.getAbsolutePath
     val docSourceUrl = sourceUrlMarker("€{FILE_PATH}")
+
+    val externalDocs = dependencyClasspath.value.collect {
+      case dep if dep.get(AttributeKey[ModuleID]("module-id")).exists(_.organization == "com.typesafe.akka") =>
+        s"${dep.data.getCanonicalPath}#${akkaScalaDocsUrl.value}"
+    }.mkString("-doc-external-doc:", ",", "")
+
     Seq(
       "-sourcepath", sourcepath,
-      "-doc-source-url", docSourceUrl
+      "-doc-source-url", docSourceUrl,
+      externalDocs
     )
   }
 
